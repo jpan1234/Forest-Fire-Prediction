@@ -42,26 +42,22 @@ initialize_parameters <- function(input_size, hidden_size, output_size) {
   )
 }
 
-relu <- function(x) {
-  result <- pmax(0, x)  # ReLU replaces negative values with zero
-  print(result)  # Print the output to check
-  return(result)  # Return the result
+leaky_relu <- function(x, alpha = 0.01) {
+  pmax(alpha * x, x)
 }
 
+
 forward_propagation <- function(x, params) {
+  # Compute first layer activation
   z1 <- x %*% params$W1 + matrix(params$b1, nrow = nrow(x), ncol = length(params$b1), byrow = TRUE)
-  #print type of z1
-  print(class(z1))
-  #print dimensions
-  print(dim(z1))
-  a1 <- relu(z1)
-  # print dimensions
-  print(dim(a1))
-  #print(a1)
+  a1 <- leaky_relu(z1)  # Apply ReLU
+  print(a1)
+  print(class(a1))
+  # Compute output layer activation
+  z2 <- a1 %*% params$W2 + matrix(params$b2, nrow = nrow(a1), ncol = length(params$b2), byrow = TRUE)
   
-  z2 <- a1 %*% params$W2 + matrix(params$b2, nrow = nrow(a1), ncol = length(params$b2), byrow = TRUE)  # Compute output layer activation
-  
-  list(a1 = a1, z2 = z2)  # Return intermediate values for backpropagation
+  # Return activations
+  list(a1 = a1, z2 = z2)
 }
 
 # Mean squared error (MSE) loss function
