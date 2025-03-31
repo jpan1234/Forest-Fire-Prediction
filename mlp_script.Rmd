@@ -1,0 +1,166 @@
+Jeffrey Pan and Jocelyn Min
+DS 4420
+Final Project
+
+This is the framework for our MLP code 
+
+
+``` {r}
+library(dplyr)
+library(recipes)
+library(Matrix)
+
+# Function to preprocess the data
+preprocess_data <- function(df, target_col) {
+  # Convert character columns (categorical data) to factors
+  df <- df %>% mutate(across(where(is.character), as.factor))
+  
+  # Define preprocessing steps: normalize numeric features and one-hot encode categorical features
+  recipe_obj <- recipe(as.formula(paste(target_col, "~ .")), data = df) %>%
+    step_normalize(all_numeric_predictors()) %>%  # Normalize all numeric predictors
+    step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%  # One-hot encode categorical predictors
+    prep(training = df)  # Prepare the transformations
+  
+  # Apply the preprocessing steps to the dataset
+  processed_df <- bake(recipe_obj, new_data = df)
+  
+  # Extract the target variable and predictor variables
+  target <- processed_df[[target_col]]
+  predictors <- processed_df %>% select(-all_of(target_col))
+  
+  # Return processed data as a list
+  list(x = as.matrix(predictors), y = as.numeric(target))
+}
+
+# Function to initialize weights and biases for the neural network
+initialize_parameters <- function(input_size, hidden_size, output_size) {
+  list(
+    W1 = matrix(runif(input_size * hidden_size, -0.5, 0.5), nrow = input_size, ncol = hidden_size),  # Weights for input to hidden layer
+    b1 = runif(hidden_size, -0.5, 0.5),  # Biases for hidden layer
+    W2 = matrix(runif(hidden_size * output_size, -0.5, 0.5), nrow = hidden_size, ncol = output_size),  # Weights for hidden to output layer
+    b2 = runif(output_size, -0.5, 0.5)  # Biases for output layer
+  )
+}
+
+relu <- function(x) {
+  result <- pmax(0, x)  # ReLU replaces negative values with zero
+  print(result)  # Print the output to check
+  return(result)  # Return the result
+}
+
+forward_propagation <- function(x, params) {
+  z1 <- x %*% params$W1 + matrix(params$b1, nrow = nrow(x), ncol = length(params$b1), byrow = TRUE)
+  #print type of z1
+  print(class(z1))
+  #print dimensions
+  print(dim(z1))
+  a1 <- relu(z1)
+  # print dimensions
+  print(dim(a1))
+  #print(a1)
+  
+  z2 <- a1 %*% params$W2 + matrix(params$b2, nrow = nrow(a1), ncol = length(params$b2), byrow = TRUE)  # Compute output layer activation
+  
+  list(a1 = a1, z2 = z2)  # Return intermediate values for backpropagation
+}
+
+# Mean squared error (MSE) loss function
+mse_loss <- function(y_pred, y_true) {
+  mean((y_pred - y_true)^2)  # Compute average squared error between predictions and actual values
+}
+
+# Mean absolute error (MAE) function
+mae_loss <- function(y_pred, y_true) {
+  mean(abs(y_pred - y_true))  # Compute average absolute error
+}
+
+# Root mean squared error (RMSE) function
+rmse_loss <- function(y_pred, y_true) {
+  sqrt(mean((y_pred - y_true)^2))  # Compute RMSE
+}
+
+# R-squared (R²) Score function
+r2_score <- function(y_pred, y_true) {
+  ss_total <- sum((y_true - mean(y_true))^2)
+  ss_residual <- sum((y_true - y_pred)^2)
+  1 - (ss_residual / ss_total)  # Compute R² Score
+}
+
+# Mean Absolute Percentage Error (MAPE)
+mape_loss <- function(y_pred, y_true) {
+  mean(abs((y_true - y_pred) / y_true)) * 100  # Compute MAPE
+}
+
+# Training function using gradient descent
+train_mlp_manual <- function(df, target_col, hidden_size = 64, epochs = 50, learning_rate = 0.01, test_split = 0.2) {
+  # Preprocess dataset
+  data <- preprocess_data(df, target_col)
+  x <- data$x  # Extract feature matrix
+  y <- data$y  # Extract target variable
+  
+  # Split into training and testing sets
+  set.seed(123)
+  train_indices <- sample(1:nrow(x), size = floor((1 - test_split) * nrow(x)))
+  x_train <- x[train_indices, , drop = FALSE]
+  y_train <- y[train_indices]
+  x_test <- x[-train_indices, , drop = FALSE]
+  y_test <- y[-train_indices]
+  
+  input_size <- ncol(x_train)  # Number of input features
+  output_size <- 1  # Output is a single scalar (fire severity)
+  
+  # Initialize model parameters (weights and biases)
+  params <- initialize_parameters(input_size, hidden_size, output_size)
+  
+  for (epoch in 1:epochs) {
+    
+    # Forward pass
+    forward <- forward_propagation(x_train, params)
+    y_pred_train <- forward$z2  # Predicted values for training set
+    loss <- mse_loss(y_pred_train, y_train)  # Compute training loss
+    
+    # Backpropagation
+    dL_dz2 <- 2 * (y_pred_train - y_train) / length(y_train)  # Gradient of loss w.r.t. output layer
+    dL_dW2 <- t(forward$a1) %*% dL_dz2  # Gradient w.r.t. weights in hidden to output layer
+    dL_db2 <- colSums(dL_dz2)  # Gradient w.r.t. biases in output layer
+    
+    dL_da1 <- dL_dz2 %*% t(params$W2)  # Propagate error back to hidden layer
+    dL_dz1 <- dL_da1 * (forward$a1 > 0)  # Apply ReLU derivative
+    dL_dW1 <- t(x_train) %*% dL_dz1  # Gradient w.r.t. weights in input to hidden layer
+    dL_db1 <- colSums(dL_dz1)  # Gradient w.r.t. biases in hidden layer
+    
+    # Gradient descent updates
+    params$W1 <- params$W1 - learning_rate * dL_dW1
+    params$b1 <- params$b1 - learning_rate * dL_db1
+    params$W2 <- params$W2 - learning_rate * dL_dW2
+    params$b2 <- params$b2 - learning_rate * dL_db2
+    
+    # Compute test loss and metrics
+    test_forward <- forward_propagation(x_test, params)
+    y_pred_test <- test_forward$z2
+    test_loss <- mse_loss(y_pred_test, y_test)
+    test_mae <- mae_loss(y_pred_test, y_test)
+    test_rmse <- rmse_loss(y_pred_test, y_test)
+    test_r2 <- r2_score(y_pred_test, y_test)
+    test_mape <- mape_loss(y_pred_test, y_test)
+    
+    # Print metrics every 10 epochs
+    if (epoch %% 10 == 0) {
+      cat("Epoch:", epoch, "Train Loss:", loss, "Test Loss:", test_loss, "MAE:", test_mae, "RMSE:", test_rmse, "R²:", test_r2, "MAPE:", test_mape, "%\n")
+    }
+  }
+  
+  params  # Return trained parameters
+}
+
+
+```
+
+``` {r}
+df <- read.csv("data/forestfires.csv")  # Load dataset
+df$month <- as.factor(df$month)  # Convert categorical columns to factors
+df$day <- as.factor(df$day)
+trained_params <- train_mlp_manual(df, "area", epochs = 100)  # Train MLP model
+
+print(trained_params)  # Print trained parameters
+```
