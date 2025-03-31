@@ -46,13 +46,17 @@ leaky_relu <- function(x, alpha = 0.01) {
   pmax(alpha * x, x)
 }
 
+# Batch normalization function
+batch_normalize <- function(x) {
+  mean_x <- colMeans(x)
+  std_x <- apply(x, 2, sd)
+  (x - mean_x) / (std_x + 1e-8) # Normalize with small epsilon to avoid division by zero
+}
 
 forward_propagation <- function(x, params) {
   # Compute first layer activation
   z1 <- x %*% params$W1 + matrix(params$b1, nrow = nrow(x), ncol = length(params$b1), byrow = TRUE)
   a1 <- leaky_relu(z1) # Apply ReLU
-  print(a1)
-  print(class(a1))
   # Compute output layer activation
   z2 <- a1 %*% params$W2 + matrix(params$b2, nrow = nrow(a1), ncol = length(params$b2), byrow = TRUE)
 
@@ -84,7 +88,17 @@ r2_score <- function(y_pred, y_true) {
 
 # Mean Absolute Percentage Error (MAPE)
 mape_loss <- function(y_pred, y_true) {
-  mean(abs((y_true - y_pred) / y_true)) * 100 # Compute MAPE
+  # Add a small constant to avoid division by zero
+  epsilon <- 1e-8
+
+  # Exclude cases where y_true is too small
+  valid_indices <- y_true > epsilon
+  if (sum(valid_indices) == 0) {
+    warning("All true values are too small for MAPE calculation.")
+    return(NA)
+  }
+
+  mean(abs((y_true[valid_indices] - y_pred[valid_indices]) / (y_true[valid_indices] + epsilon))) * 100
 }
 
 # Training function using gradient descent
@@ -107,12 +121,14 @@ train_mlp_manual <- function(df, target_col, hidden_size = 64, epochs = 50, lear
 
   # Initialize model parameters (weights and biases)
   params <- initialize_parameters(input_size, hidden_size, output_size)
+  final_train_loss <- NA  # Initialize variable to store final training loss
 
   for (epoch in 1:epochs) {
     # Forward pass
     forward <- forward_propagation(x_train, params)
     y_pred_train <- forward$z2 # Predicted values for training set
     loss <- mse_loss(y_pred_train, y_train) # Compute training loss
+    final_train_loss <- loss  # Store the final training loss
 
     # Backpropagation
     dL_dz2 <- 2 * (y_pred_train - y_train) / length(y_train) # Gradient of loss w.r.t. output layer
@@ -145,15 +161,49 @@ train_mlp_manual <- function(df, target_col, hidden_size = 64, epochs = 50, lear
     }
   }
 
-  params # Return trained parameters
+  list(params = params, train_loss = final_train_loss) # Return trained parameters and final training loss
+}
+
+# Cross-validation function
+cross_validate_mlp <- function(df, target_col, hidden_size = 64, epochs = 50, learning_rate = 0.01, lambda = 0.01, k = 5) {
+  folds <- sample(rep(1:k, length.out = nrow(df))) # Create k folds
+  metrics <- data.frame(Fold = integer(), Train_Loss = numeric(), Test_Loss = numeric(), R2 = numeric())
+
+  for (fold in 1:k) {
+    # Split data into training and validation sets
+    train_data <- df[folds != fold, ]
+    test_data <- df[folds == fold, ]
+
+    # Train the model
+    result <- train_mlp_manual(train_data, target_col, hidden_size, epochs, learning_rate, test_split = 0.2, lambda)
+    params <- result$params
+    train_loss <- result$train_loss # Capture the training loss
+
+    # Preprocess test data
+    test_processed <- preprocess_data(test_data, target_col)
+    x_test <- batch_normalize(test_processed$x) # Apply batch normalization
+    y_test <- test_processed$y
+
+    # Evaluate on test data
+    test_forward <- forward_propagation(x_test, params)
+    y_pred_test <- test_forward$z2
+    test_loss <- mse_loss(y_pred_test, y_test)
+    test_r2 <- r2_score(y_pred_test, y_test)
+
+    # Store metrics
+    metrics <- rbind(metrics, data.frame(Fold = fold, Train_Loss = train_loss, Test_Loss = test_loss, R2 = test_r2))
+  }
+
+  metrics
 }
 ```
 
-``` {r}
+```{r}
+
 df <- read.csv("data/forestfires.csv") # Load dataset
 df$month <- as.factor(df$month) # Convert categorical columns to factors
 df$day <- as.factor(df$day)
-trained_params <- train_mlp_manual(df, "area", epochs = 100) # Train MLP model
+cv_metrics <- cross_validate_mlp(df, "area", epochs = 10) # Perform cross-validation
 
-print(trained_params) # Print trained parameters
+print(cv_metrics) # Print cross-validation metrics
 ```
