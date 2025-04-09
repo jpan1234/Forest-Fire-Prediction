@@ -1,0 +1,391 @@
+---
+title: "MLP Implementation with Visualization"
+authors: "Jeffrey Pan and Jocelyn Min"
+course: "DS 4420"
+output: html_document
+---
+
+# MLP Implementation with Training Visualization
+
+
+```{r load_libraries}
+library(dplyr)
+library(recipes)
+library(Matrix)
+library(ggplot2)
+```
+
+```{r model_implementation}
+# Function to preprocess data without causing leakage
+preprocess_data <- function(df, target_col, recipe_obj = NULL, is_training = TRUE) {
+  df <- df %>% mutate(across(where(is.character), as.factor))
+  
+  if (is_training) {
+    recipe_obj <- recipe(as.formula(paste(target_col, "~ .")), data = df) %>%
+      step_zv(all_predictors()) %>% 
+      step_normalize(all_numeric_predictors()) %>%
+      step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%
+      prep(training = df)  # Prepare using training data only
+  }
+  
+  processed_df <- bake(recipe_obj, new_data = df)  # Apply transformations
+  target <- processed_df[[target_col]]
+  predictors <- processed_df %>% select(-all_of(target_col))
+  
+  list(x = as.matrix(predictors), y = as.numeric(target), recipe_obj = recipe_obj)
+}
+
+
+initialize_parameters <- function(input_size, hidden_size1, hidden_size2, output_size = 1) {
+  if (is.na(input_size) || is.na(hidden_size1) || is.na(hidden_size2) || is.na(output_size)) {
+    stop("Invalid dimensions passed to initialize_parameters.")
+  }
+  list(
+    W1 = matrix(runif(input_size * hidden_size1, -0.5, 0.5), nrow = input_size, ncol = hidden_size1),
+    b1 = runif(hidden_size1, -0.5, 0.5),
+    W2 = matrix(runif(hidden_size1 * hidden_size2, -0.5, 0.5), nrow = hidden_size1, ncol = hidden_size2),
+    b2 = runif(hidden_size2, -0.5, 0.5),
+    W3 = matrix(runif(hidden_size2 * output_size, -0.5, 0.5), nrow = hidden_size2, ncol = output_size),
+    b3 = runif(output_size, -0.5, 0.5)
+  )
+}
+
+leaky_relu <- function(x, alpha = 0.01) {
+  pmax(alpha * x, x)
+}
+
+# Batch normalization function
+batch_normalize <- function(x) {
+  mean_x <- colMeans(x)
+  std_x <- apply(x, 2, sd)
+  (x - mean_x) / (std_x + 1e-8) # Normalize with small epsilon to avoid division by zero
+}
+
+forward_propagation <- function(x, params) {
+
+  # First hidden layer
+  z1 <- x %*% params$W1 + matrix(params$b1, nrow = nrow(x), ncol = length(params$b1), byrow = TRUE) # nolint: line_length_linter. # nolint
+  a1 <- leaky_relu(z1)
+   # nolint
+  # Second hidden layer
+  z2 <- a1 %*% params$W2 + matrix(params$b2, nrow = nrow(a1), ncol = length(params$b2), byrow = TRUE)
+  a2 <- leaky_relu(z2)
+  
+  # Output layer
+  z3 <- a2 %*% params$W3 + matrix(params$b3, nrow = nrow(a2), ncol = length(params$b3), byrow = TRUE)
+  
+  list(a1 = a1, a2 = a2, z3 = z3)
+}
+
+# Mean squared error (MSE) loss function
+mse_loss <- function(y_pred, y_true) {
+  mean((y_pred - y_true)^2) # Compute average squared error between predictions and actual values
+}
+
+# Mean absolute error (MAE) function
+mae_loss <- function(y_pred, y_true) {
+  mean(abs(y_pred - y_true)) # Compute average absolute error
+}
+
+# Root mean squared error (RMSE) function
+rmse_loss <- function(y_pred, y_true) {
+  sqrt(mean((y_pred - y_true)^2)) # Compute RMSE
+}
+
+# R-squared (R²) Score function
+r2_score <- function(y_pred, y_true) {
+  ss_total <- sum((y_true - mean(y_true))^2)
+  ss_residual <- sum((y_true - y_pred)^2)
+  1 - (ss_residual / ss_total) # Compute R² Score
+}
+
+# Mean Absolute Percentage Error (MAPE)
+mape_loss <- function(y_pred, y_true) {
+  # Add a small constant to avoid division by zero
+  epsilon <- 1e-8
+
+  # Exclude cases where y_true is too small
+  valid_indices <- y_true > epsilon
+  if (sum(valid_indices) == 0) {
+    warning("All true values are too small for MAPE calculation.")
+    return(NA)
+  }
+
+  mean(abs((y_true[valid_indices] - y_pred[valid_indices]) / (y_true[valid_indices] + epsilon))) * 100
+}
+
+# Modified train_mlp_manual function to track metrics across epochs
+train_mlp_manual <- function(df, target_col, hidden_size = 32, epochs = 5000, learning_rate = 0.02, test_split = 0.2, lambda = 0.01) {
+  # Preprocess dataset
+  data <- preprocess_data(df, target_col)
+  x <- data$x # Extract feature matrix
+  y <- data$y # Extract target variable
+
+  # Split into training and testing sets
+  set.seed(123)
+  train_indices <- sample(1:nrow(x), size = floor((1 - test_split) * nrow(x)))
+  train_data <- df[train_indices, ]
+  test_data <- df[-train_indices, ]
+
+  # Preprocess training data
+  train_processed <- preprocess_data(train_data, target_col)
+  x_train <- train_processed$x
+  y_train <- train_processed$y
+  recipe_obj <- train_processed$recipe_obj
+
+  # Preprocess testing data using the same recipe
+  test_processed <- preprocess_data(test_data, target_col, recipe_obj)
+  x_test <- test_processed$x
+  y_test <- test_processed$y
+
+  input_size <- ncol(x_train) # Number of input features
+  output_size <- 1 # Output is a single scalar (area)
+  
+  # Initialize model parameters (weights and biases)
+  params <- initialize_parameters(input_size, hidden_size, hidden_size, output_size)
+
+  # Track metrics across epochs for plotting
+  metrics <- data.frame(
+    epoch = integer(),
+    train_loss = numeric(),
+    test_loss = numeric(),
+    train_r2 = numeric(),
+    test_r2 = numeric()
+  )
+  
+  for (epoch in 1:epochs) {
+    # Forward pass for training
+    forward_train <- forward_propagation(x_train, params)
+    y_pred_train <- forward_train$z3 # Predicted values for training set
+    y_pred_train <- as.matrix(y_pred_train) # Ensure correct dimensions
+    
+    # Forward pass for testing
+    forward_test <- forward_propagation(x_test, params)
+    y_pred_test <- forward_test$z3
+    y_pred_test <- as.matrix(y_pred_test)
+    
+    # Compute metrics
+    train_loss <- mse_loss(y_pred_train, y_train)
+    test_loss <- mse_loss(y_pred_test, y_test)
+    train_r2 <- r2_score(y_pred_train, y_train)
+    test_r2 <- r2_score(y_pred_test, y_test)
+    
+    # Record metrics every 100 epochs or at specific points
+    if (epoch == 1 || epoch %% 100 == 0 || epoch == epochs) {
+      metrics <- rbind(metrics, data.frame(
+        epoch = epoch,
+        train_loss = train_loss,
+        test_loss = test_loss,
+        train_r2 = train_r2,
+        test_r2 = test_r2
+      ))
+      
+      # Print progress
+      if (epoch %% 500 == 0) {
+        cat(sprintf("Epoch %d: Train Loss = %.6f, Test Loss = %.6f, Train R² = %.4f, Test R² = %.4f\n", 
+                  epoch, train_loss, test_loss, train_r2, test_r2))
+      }
+    }
+
+    # Backward pass (compute gradients)
+    dL_dz3 <- 2 * (y_pred_train - y_train) / length(y_train) # Gradient of loss w.r.t. output layer
+    dL_dW3 <- t(forward_train$a2) %*% dL_dz3 + lambda * params$W3 # Gradient of weights in output layer
+    dL_db3 <- colSums(dL_dz3) # Gradient of biases in output layer
+    
+    dL_da2 <- dL_dz3 %*% t(params$W3) # Gradient w.r.t. activations of second hidden layer
+    dL_dz2 <- dL_da2 * (forward_train$a2 > 0) # Apply Leaky ReLU derivative
+    dL_dW2 <- t(forward_train$a1) %*% dL_dz2 + lambda * params$W2 # Gradient of weights in second hidden layer
+    dL_db2 <- colSums(dL_dz2) # Gradient of biases in second hidden layer
+    
+    dL_da1 <- dL_dz2 %*% t(params$W2) # Gradient w.r.t. activations of first hidden layer
+    dL_dz1 <- dL_da1 * (forward_train$a1 > 0) # Apply Leaky ReLU derivative
+    dL_dW1 <- t(x_train) %*% dL_dz1 + lambda * params$W1 # Gradient of weights in first hidden layer
+    dL_db1 <- colSums(dL_dz1) # Gradient of biases in first hidden layer
+
+    # Gradient descent updates
+    params$W1 <- params$W1 - learning_rate * dL_dW1
+    params$b1 <- params$b1 - learning_rate * dL_db1
+    params$W2 <- params$W2 - learning_rate * dL_dW2
+    params$b2 <- params$b2 - learning_rate * dL_db2
+    params$W3 <- params$W3 - learning_rate * dL_dW3
+    params$b3 <- params$b3 - learning_rate * dL_db3
+  }
+
+  list(params = params, metrics = metrics) # Return trained parameters and metrics history
+}
+
+# Function to plot metrics over epochs
+plot_training_metrics <- function(metrics) {
+  # Load necessary library
+  library(ggplot2)
+  
+  # Plot loss over epochs
+  loss_plot <- ggplot(metrics, aes(x = epoch)) +
+    geom_line(aes(y = train_loss, color = "Training Loss")) +
+    geom_line(aes(y = test_loss, color = "Testing Loss")) +
+    scale_x_log10() +  # Log scale for better visualization
+    scale_color_manual(values = c("Training Loss" = "blue", "Testing Loss" = "red")) +
+    labs(title = "Loss over Training Epochs",
+         x = "Epoch (log scale)",
+         y = "Mean Squared Error",
+         color = "Legend") +
+    theme_minimal()
+  
+  # Plot R² over epochs
+  r2_plot <- ggplot(metrics, aes(x = epoch)) +
+    geom_line(aes(y = train_r2, color = "Training R²")) +
+    geom_line(aes(y = test_r2, color = "Testing R²")) +
+    scale_x_log10() +  # Log scale for better visualization
+    scale_color_manual(values = c("Training R²" = "green", "Testing R²" = "purple")) +
+    labs(title = "R² Score over Training Epochs",
+         x = "Epoch (log scale)",
+         y = "R² Score",
+         color = "Legend") +
+    theme_minimal()
+  
+  # Return list of plots
+  list(loss_plot = loss_plot, r2_plot = r2_plot)
+}
+
+# Modified cross-validation function to include plotting
+cross_validate_mlp <- function(df, target_col, hidden_size = 32, epochs = 5000, learning_rate = 0.02, lambda = 0.01, k = 5, plot_metrics = TRUE) {
+  set.seed(123)  # Ensure reproducibility
+  folds <- sample(rep(1:k, length.out = nrow(df)))
+  metrics_summary <- data.frame(Fold = integer(), Train_Loss = numeric(), Test_Loss = numeric(), R2 = numeric())
+  
+  # Store metrics for each fold
+  all_metrics <- list()
+  
+  for (fold in 1:k) {
+    train_data <- df[folds != fold, ]
+    test_data <- df[folds == fold, ]
+    
+    # Preprocess training data only and use the same transformation for test data
+    train_processed <- preprocess_data(train_data, target_col, is_training = TRUE)
+    recipe_obj <- train_processed$recipe_obj
+    test_processed <- preprocess_data(test_data, target_col, recipe_obj, is_training = FALSE)
+    
+    x_train <- train_processed$x
+    y_train <- train_processed$y
+    x_test <- test_processed$x
+    y_test <- test_processed$y
+    
+    if (ncol(x_train) != ncol(x_test)) {
+      stop("Feature mismatch: Training and testing sets have different numbers of features!")
+    }
+    
+    # Train model on the fold
+    result <- train_mlp_manual(train_data, target_col, hidden_size, epochs, learning_rate, test_split = 0.2, lambda)
+    params <- result$params
+    fold_metrics <- result$metrics
+    
+    # Store metrics for this fold
+    all_metrics[[fold]] <- fold_metrics
+    
+    # Get final metrics
+    final_metrics <- fold_metrics[nrow(fold_metrics), ]
+    
+    metrics_summary <- rbind(metrics_summary, data.frame(
+      Fold = fold, 
+      Train_Loss = final_metrics$train_loss, 
+      Test_Loss = final_metrics$test_loss, 
+      R2 = final_metrics$test_r2
+    ))
+    
+    print(paste("Fold", fold, "completed. Train Loss:", round(final_metrics$train_loss, 6), 
+                "Test Loss:", round(final_metrics$test_loss, 6), 
+                "R² Score:", round(final_metrics$test_r2, 4)))
+    
+    # Plot metrics for this fold if required
+    if (plot_metrics) {
+      plots <- plot_training_metrics(fold_metrics)
+      print(plots$loss_plot + ggtitle(paste("Fold", fold, "- Loss over Training Epochs")))
+      print(plots$r2_plot + ggtitle(paste("Fold", fold, "- R² Score over Training Epochs")))
+    }
+  }
+  
+  # Return detailed metrics and summary
+  list(metrics_summary = metrics_summary, all_metrics = all_metrics)
+}
+```
+
+## Implementation
+
+```{r run_model}
+# Load dataset
+df <- read.csv("data/forestfires.csv") 
+# Convert categorical columns to factors
+df$month <- as.factor(df$month)
+df$day <- as.factor(df$day)
+# Apply log(1 + x) transformation
+df$area <- log1p(df$area)
+
+# Perform cross-validation with metrics visualization
+cv_results <- cross_validate_mlp(
+  df = df, 
+  target_col = "area", 
+  epochs = 2000,  # Reduced for faster execution
+  lambda = 0.05, 
+  plot_metrics = TRUE
+)
+
+# Print summary metrics across folds
+print(cv_results$metrics_summary)
+
+# Calculate average metrics across folds
+cat("\nAverage Metrics Across All Folds:\n")
+avg_metrics <- colMeans(cv_results$metrics_summary[, c("Train_Loss", "Test_Loss", "R2")])
+print(avg_metrics)
+```
+
+## Individual Model Training with Metrics Visualization
+
+```{r single_model}
+# Train a single model and visualize metrics
+model_result <- train_mlp_manual(
+  df = df, 
+  target_col = "area", 
+  hidden_size = 32,
+  epochs = 3000, 
+  learning_rate = 0.02,
+  test_split = 0.2,
+  lambda = 0.05
+)
+
+# Plot the training metrics
+plots <- plot_training_metrics(model_result$metrics)
+print(plots$loss_plot)
+print(plots$r2_plot)
+
+# Make predictions using the trained model
+test_indices <- sample(1:nrow(df), size = 0.2 * nrow(df))
+test_data <- df[test_indices, ]
+train_processed <- preprocess_data(df[-test_indices, ], "area")
+recipe_obj <- train_processed$recipe_obj
+test_processed <- preprocess_data(test_data, "area", recipe_obj, is_training = FALSE)
+
+# Make predictions
+predictions <- forward_propagation(test_processed$x, model_result$params)$z3
+
+# Calculate final test metrics
+final_mse <- mse_loss(predictions, test_processed$y)
+final_r2 <- r2_score(predictions, test_processed$y)
+final_rmse <- rmse_loss(predictions, test_processed$y)
+
+cat(sprintf("\nFinal Test Metrics:\nMSE: %.6f\nRMSE: %.6f\nR²: %.4f\n", 
+            final_mse, final_rmse, final_r2))
+
+# Plot actual vs predicted values
+prediction_df <- data.frame(
+  Actual = expm1(test_processed$y),  # Reverse log1p transformation
+  Predicted = expm1(predictions)      # Reverse log1p transformation
+)
+
+ggplot(prediction_df, aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Actual vs Predicted Values",
+       x = "Actual Area (Original Scale)",
+       y = "Predicted Area (Original Scale)") +
+  theme_minimal()
+```
