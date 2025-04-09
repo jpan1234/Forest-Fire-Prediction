@@ -153,6 +153,7 @@ train_mlp_manual <- function(df, target_col, hidden_size = 32, epochs = 5000, le
 
     # Backward pass (compute gradients)
     dL_dz3 <- 2 * (y_pred_train - y_train) / length(y_train) # Gradient of loss w.r.t. output layer
+    dL_dz3 <- dL_dz3 * (y_pred_train > 0)
     dL_dW3 <- t(forward$a2) %*% dL_dz3 + lambda * params$W3 # Gradient of weights in output layer
     dL_db3 <- colSums(dL_dz3) # Gradient of biases in output layer
     
