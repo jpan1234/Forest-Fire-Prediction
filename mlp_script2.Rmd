@@ -189,6 +189,7 @@ train_mlp_manual <- function(df, target_col, hidden_size = 32, epochs = 5000, le
 
     # Backward pass (compute gradients)
     dL_dz3 <- 2 * (y_pred_train - y_train) / length(y_train) # Gradient of loss w.r.t. output layer
+    dL_dz3 <- dL_dz3 * (y_pred_train > 0)
     dL_dW3 <- t(forward_train$a2) %*% dL_dz3 + lambda * params$W3 # Gradient of weights in output layer
     dL_db3 <- colSums(dL_dz3) # Gradient of biases in output layer
     
@@ -216,8 +217,6 @@ train_mlp_manual <- function(df, target_col, hidden_size = 32, epochs = 5000, le
 
 # Function to plot metrics over epochs
 plot_training_metrics <- function(metrics) {
-  # Load necessary library
-  library(ggplot2)
   
   # Plot loss over epochs
   loss_plot <- ggplot(metrics, aes(x = epoch)) +
@@ -296,7 +295,7 @@ cross_validate_mlp <- function(df, target_col, hidden_size = 32, epochs = 5000, 
                 "Test Loss:", round(final_metrics$test_loss, 6), 
                 "R² Score:", round(final_metrics$test_r2, 4)))
     
-    # Plot metrics for this fold if required
+    # Plot metrics 
     if (plot_metrics) {
       plots <- plot_training_metrics(fold_metrics)
       print(plots$loss_plot + ggtitle(paste("Fold", fold, "- Loss over Training Epochs")))
@@ -320,14 +319,7 @@ df$day <- as.factor(df$day)
 # Apply log(1 + x) transformation
 df$area <- log1p(df$area)
 
-# Perform cross-validation with metrics visualization
-cv_results <- cross_validate_mlp(
-  df = df, 
-  target_col = "area", 
-  epochs = 2000,  # Reduced for faster execution
-  lambda = 0.05, 
-  plot_metrics = TRUE
-)
+cv_results <- cross_validate_mlp(df, "area", 10000, 0.05, plot_metrics = TRUE)
 
 # Print summary metrics across folds
 print(cv_results$metrics_summary)
