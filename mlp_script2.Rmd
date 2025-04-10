@@ -167,8 +167,8 @@ train_mlp_manual <- function(df, target_col, hidden_size = 32, epochs = 5000, le
     # Compute metrics
     train_loss <- mse_loss(y_pred_train, y_train)
     test_loss <- mse_loss(y_pred_test, y_test)
-    train_r2 <- r2_score(y_pred_train, y_train)
-    test_r2 <- r2_score(y_pred_test, y_test)
+    train_r2 <- cor(y_pred_train, y_train)^2
+    test_r2 <- cor(y_pred_test, y_test)^2
     
     # Record metrics every 100 epochs or at specific points
     if (epoch == 1 || epoch %% 100 == 0 || epoch == epochs) {
@@ -319,7 +319,13 @@ df$day <- as.factor(df$day)
 # Apply log(1 + x) transformation
 df$area <- log1p(df$area)
 
-cv_results <- cross_validate_mlp(df, "area", 10000, 0.05, plot_metrics = TRUE)
+cv_results <- cross_validate_mlp(
+  df = df, 
+  target_col = "area", 
+  epochs = 5000, 
+  lambda = 0.05, 
+  plot_metrics = TRUE
+)
 
 # Print summary metrics across folds
 print(cv_results$metrics_summary)
