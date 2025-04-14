@@ -56,6 +56,11 @@ leaky_relu <- function(x, alpha = 0.01) {
   pmax(alpha * x, x)
 }
 
+# mse loss
+mse_loss <- function(y_pred, y_true) {
+  mean((y_pred - y_true)^2)
+}
+
 # batch normalization function
 batch_normalize <- function(x) {
   mean_x <- colMeans(x)
@@ -216,7 +221,7 @@ plot_training_metrics <- function(metrics) {
 }
 
 # cross-validation function to include plotting
-cross_validate_mlp <- function(df, target_col, hidden_size = 32, epochs = 5000, learning_rate = 0.02, lambda = 0.01, k = 5, plot_metrics = TRUE) {
+cross_validate_mlp <- function(df, target_col, hidden_size = 32, epochs = 1000, learning_rate = 0.01, lambda = 0.01, k = 5, plot_metrics = TRUE) {
   set.seed(123) 
   folds <- sample(rep(1:k, length.out = nrow(df)))
   metrics_summary <- data.frame(Fold = integer(), Train_Loss = numeric(), Test_Loss = numeric(), R2 = numeric())
@@ -292,8 +297,8 @@ df$area <- log1p(df$area)
 cv_results <- cross_validate_mlp(
   df = df, 
   target_col = "area", 
-  epochs = 5000, 
-  lambda = 0.05, 
+  epochs = 400, 
+  lambda = 0.01, 
   plot_metrics = TRUE
 )
 
